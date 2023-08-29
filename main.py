@@ -1,14 +1,24 @@
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, Form
+from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from typing import List, Optional
 from fastapi.middleware.cors import CORSMiddleware
+from passlib.context import CryptContext
+from jose import JWTError, jwt
+import bcrypt
+from datetime import datetime, timedelta
+import secrets
+
+secret_key = secrets.token_hex(32)
+# print(secret_key)
 
 
 # Configure CORS
 origins = [
-    "http://localhost:3000",  #Frontend URL here
+    "http://localhost:3000",  
 ]
+
 
 app = FastAPI()
 
@@ -20,133 +30,138 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.get('/healthcheck/')
 async def healthcheck():
     return {"Hello": "World"}
 
+# Fake DB
 fake_users_db = {
     "testuser1": {
         "email": "testuser1@example.com",
         "username": "testuser1",
-        "password": "testpassword1",
+        "hashed_password": bcrypt.hashpw(b"testpassword1", bcrypt.gensalt()).decode('utf-8'),
     },
     "testuser2": {
         "email": "testuser2@example.com",
         "username": "testuser2",
-        "password": "testpassword2",
-    }
+        "hashed_password": bcrypt.hashpw(b"testpassword2", bcrypt.gensalt()).decode('utf-8'),
+    },
 }
 
-class User(BaseModel):
+# JWT configuration 
+SECRET_KEY = secret_key
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
+
+# Password hashing
+class PasswordHasher:
+    def verify_password(self, plain_password, hashed_password):
+        return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
+
+password_hasher = PasswordHasher()
+
+# OAuth2 password bearer
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+# User model
+class UserInDB(BaseModel):
     username: str
     email: str
 
-class UserCreate(User):
+# User model
+class UserCreate(BaseModel):
+    username: str
+    email: str
     password: str
 
-class UserInDB(User):
-    password: str
+# User creation and storage
+def create_user(user, hashed_password):
+    if user.username in fake_users_db:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Username already exists",
+        )
+    fake_users_db[user.username] = {
+        "email": user.email,
+        "username": user.username,
+        "hashed_password": hashed_password,
+    }
+    return user
 
+# User authentication
+def authenticate_user(username, password):
+    user_data = fake_users_db.get(username)
+    if user_data and password_hasher.verify_password(password, user_data["hashed_password"]):
+        return UserInDB(username=user_data["username"], email=user_data["email"])
+    return None
 
-# OAuth2 password bearer token
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+# Create JWT token
+def create_jwt_token(data: dict, expires_delta: timedelta):
+    to_encode = data.copy()
+    expire = datetime.utcnow() + expires_delta
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
 
-# Function to get user from the database
-def get_user(username: str):
-    if username in fake_users_db:
-        user_dict = fake_users_db[username]
-        return UserInDB(**user_dict)
-
-# Function to verify user credentials
-def authenticate_user(username: str, password: str):
-    user = get_user(username)
-    if user is None or user.password != password:
-        return False
-    return True
-
-
-# Route to get a token for authentication
+# Route to get an access token
 @app.post("/token")
 async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
-    identifier = form_data.username  # This can be either username or email
-    password = form_data.password
-    user = next((u for u in fake_users_db.values() if u['username'] == identifier or u['email'] == identifier), None)
-    if user is None or user["password"] != password:
+    user = authenticate_user(form_data.username, form_data.password)
+    if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username/email or password",
+            detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    return {"access_token": user["username"], "token_type": "bearer"}
-
-
-# Dependency to get the current user
-async def get_current_user(token: str = Depends(oauth2_scheme)):
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_jwt_token(
+        data={"sub": user.username}, expires_delta=access_token_expires
     )
-    username = token  # In this simple example, the token is the username
-    user = get_user(username)
-    if user is None:
-        raise credentials_exception
-    return user
+    response = {"access_token": access_token, "token_type": "bearer", "username": user.username}
+    # response = JSONResponse(content={"message": "Login successful"})
+    # response.set_cookie(key="access_token", value=access_token, httponly=True)
+    return response
 
-
-# Protected route that requires authentication
-@app.get("/secure-route/")
-async def secure_route(current_user: User = Depends(get_current_user)):
-    return {"message": "This is a secure route", "user": current_user}
-
-
-# Get all users
-@app.get("/users/", response_model=List[User])
-async def get_users():
-    return fake_users_db.values()
-
-# Get user by username
-@app.get("/users/{username}", response_model=User)
-async def get_user_by_username(username: str):
-    if username not in fake_users_db:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
-        )
-    user_dict = fake_users_db[username]
-    return UserInDB(**user_dict)
-   
-# Create a user
+# Route to create a new user
 @app.post("/users/")
-async def create_user(user: UserCreate):
-    existing_user = next((u for u in fake_users_db.values() if u['username'] == user.username or u['email'] == user.email), None)
-    if existing_user:
-        raise HTTPException(
-            status_code=400,
-            detail="Username or email already exists"
-        )
-    user_data = {"username": user.username, "email": user.email, "password": user.password}
-    fake_users_db[user.username] = user_data
-    return user_data
+async def create_new_user(user: UserCreate):
+    hashed_password = bcrypt.hashpw(user.password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+    user_in_db = UserInDB(username=user.username, email=user.email)
+    created_user = create_user(user_in_db, hashed_password)
+    return {"message": "User created successfully", "user_id": created_user.username}
 
-# Modify a user
-@app.put("/users/{username}", response_model=User)
-async def update_user(username: str, user: UserCreate):
-    if username not in fake_users_db:
+# Route to get all users
+@app.get("/users/", response_model=List[UserInDB])
+async def get_all_users():
+    users = [UserInDB(username=user_data["username"], email=user_data["email"]) for user_data in fake_users_db.values()]
+    return users
+
+# Route to modify username
+@app.put("/users/{username}/modify-username/")
+async def modify_username(username: str, new_username: str):
+    user_data = fake_users_db.get(username)
+    if not user_data:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
+            detail="User not found",
         )
-    fake_users_db[username] = {"username": user.username, "password": user.password}
-    return user
+    
+    # Update the user's username
+    user_data["username"] = new_username
+    fake_users_db[new_username] = user_data
+    del fake_users_db[username]
+    
+    return {"message": "Username modified successfully", "new_username": new_username}
 
-# Delete a user
-@app.delete("/users/{username}", response_model=User)
+# Route to delete user
+@app.delete("/users/{username}/delete/")
 async def delete_user(username: str):
-    if username not in fake_users_db:
+    if username in fake_users_db:
+        del fake_users_db[username]
+        return {"message": "User deleted successfully", "deleted_username": username}
+    else:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
+            detail="User not found",
         )
-    deleted_user = fake_users_db.pop(username)
-    return deleted_user
