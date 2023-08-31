@@ -27,7 +27,7 @@ async def create_new_user(user: UserCreate):
     hashed_password = bcrypt.hashpw(user.password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
     user_in_db = UserInDB(username=user.username, email=user.email)
     created_user = create_user(user_in_db, hashed_password)
-    return {"message": "User created successfully", "user_id": created_user.username}
+    return {"message": "User created successfully", "username": created_user.username}
 
 @router.get("/users/", response_model=List[UserInDB])
 async def get_all_users():
