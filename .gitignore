@@ -26,3 +26,4 @@ venv/
 # Miscellaneous
 .idea/
 .vscode/
+.vercel
