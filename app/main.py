@@ -16,7 +16,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(users_router, tags=["users"])
+app.include_router(users_router,prefix="/users", tags=["users"])
 app.include_router(auth_router, prefix="/auth", tags=["auth"])
 
 @app.get("/", tags=["Root"])

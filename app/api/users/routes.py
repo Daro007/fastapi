@@ -22,19 +22,19 @@ def create_user(user, hashed_password):
     }
     return user
 
-@router.post("/users/")
+@router.post("/")
 async def create_new_user(user: UserCreate):
     hashed_password = bcrypt.hashpw(user.password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
     user_in_db = UserInDB(username=user.username, email=user.email)
     created_user = create_user(user_in_db, hashed_password)
     return {"message": "User created successfully", "username": created_user.username}
 
-@router.get("/users/", response_model=List[UserInDB])
+@router.get("/", response_model=List[UserInDB])
 async def get_all_users():
     users = [UserInDB(username=user_data["username"], email=user_data["email"]) for user_data in fake_users_db.values()]
     return users
 
-@router.put("/users/{username}/modify-username/")
+@router.put("/{username}/")
 async def modify_username(username: str, new_username: str):
     user_data = fake_users_db.get(username)
     if not user_data:
@@ -49,7 +49,7 @@ async def modify_username(username: str, new_username: str):
     
     return {"message": "Username modified successfully", "new_username": new_username}
 
-@router.delete("/users/{username}/delete/")
+@router.delete("/{username}/")
 async def delete_user(username: str):
     if username in fake_users_db:
         del fake_users_db[username]
