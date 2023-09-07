@@ -36,3 +36,4 @@ Welcome to the backend repository of the FastAPI project. This repository contai
 ## API Documentation
 
 The API documentation can be accessed at http://localhost:8000/docs or http://localhost:8000/redoc when the backend is running.
+
